@@ -1,4 +1,4 @@
-module taskqueue
+module github.com/VegaPaithankar.taskqueue
 
 go 1.17
 
