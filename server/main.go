@@ -2,7 +2,8 @@ package main
 
 import (
 	"log"
-	"taskqueue"
+
+	"github.com/VegaPaithankar/taskqueue"
 
 	"github.com/gofiber/fiber/v2"
 )

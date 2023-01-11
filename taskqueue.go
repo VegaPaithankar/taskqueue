@@ -1,7 +1,6 @@
 package taskqueue
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -11,10 +10,11 @@ import (
 const capacity = 10
 
 type TaskQueue struct {
-	taskCh   chan Task
+	taskCh   chan *Task
 	taskDone chan int64
-	queue    []Task
-	running  map[int64]Task
+	queue    []*Task
+	queued   map[int64]*Task
+	running  map[int64]*Task
 	mu       sync.Mutex
 	nextId   int64
 	done     bool
@@ -22,43 +22,34 @@ type TaskQueue struct {
 
 func NewTaskQueue() *TaskQueue {
 	return &TaskQueue{
-		taskCh:   make(chan Task, capacity),
+		taskCh:   make(chan *Task, capacity),
 		taskDone: make(chan int64),
-		running:  make(map[int64]Task),
-		queue:    make([]Task, 0),
+		queued:   make(map[int64]*Task),
+		running:  make(map[int64]*Task),
+		queue:    make([]*Task, 0),
 	}
 }
 
 func (t *TaskQueue) AddTaskRequest(taskType string, payload interface{}) (int64, error) {
-	var task Task
-	ctx := context.Background()
-	switch taskType {
-	case ShortTaskType:
-		task = &ShortTask{
-			ctx:     ctx,
-			payload: payload.(string),
-		}
-	case LongTaskType:
-		task = &LongTask{
-			ctx:     ctx,
-			payload: payload.(string),
-		}
-	default:
-		return 0, fmt.Errorf("unknown task type: %s", taskType)
+	task, err := CreateTask(taskType, payload)
+	if err != nil {
+		return -1, err
 	}
-	task.SetId(t.nextId)
+	(*task).SetId(t.nextId)
 	t.nextId++
 	t.AddTask(task)
-	return task.Id(), nil
+	return (*task).Id(), nil
 }
 
-func (t *TaskQueue) AddTask(task Task) {
+func (t *TaskQueue) AddTask(task *Task) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	id := (*task).Id()
 	if len(t.running) < capacity {
-		t.running[task.Id()] = task
+		t.running[id] = task
 		t.taskCh <- task
 	} else {
+		t.queued[id] = task
 		t.queue = append(t.queue, task)
 	}
 }
@@ -68,7 +59,26 @@ func (t *TaskQueue) AbortTask(id int64) error {
 	defer t.mu.Unlock()
 	if _, ok := t.running[id]; ok {
 		// send signal to task to abort
-		t.running[id].Abort()
+		(*t.running[id]).Abort()
+	} else if _, ok := t.queued[id]; ok {
+		// remove from queue by iterating over queue.
+		// This is inefficient, but ok for a small queue.
+		// TBD: To make it more efficient, we could use a skip-list or red-black tree.
+
+		// get position in queue
+		pos := -1
+		for i, task := range t.queue {
+			if (*task).Id() == id {
+				pos = i
+				break
+			}
+		}
+		if pos == -1 {
+			return fmt.Errorf("task %d not found in queue", id)
+		}
+		t.queue = append(t.queue[:pos], t.queue[pos+1:]...)
+
+		delete(t.queued, id)
 	} else {
 		return fmt.Errorf("task %d not found", id)
 	}
@@ -86,20 +96,20 @@ func (t *TaskQueue) Run() {
 	}
 
 	for !t.done {
-		select {
-		case id := <-t.taskDone:
-			log.Printf("task %d (%s) done", id, t.running[id].toString())
-			t.mu.Lock()
-			delete(t.running, id)
-			// dispatch next task
-			if len(t.queue) > 0 {
-				task := t.queue[0]
-				t.queue = t.queue[1:]
-				t.running[task.Id()] = task
-				t.taskCh <- task
-			}
-			t.mu.Unlock()
+		done_id := <-t.taskDone
+		log.Printf("task %d (%s) done", done_id, (*t.running[done_id]).toString())
+		t.mu.Lock()
+		delete(t.running, done_id)
+		// dispatch next task
+		if len(t.queue) > 0 {
+			task := t.queue[0]
+			t.queue = t.queue[1:]
+			id := (*task).Id()
+			delete(t.queued, id)
+			t.running[id] = task
+			t.taskCh <- task
 		}
+		t.mu.Unlock()
 	}
 	wg.Wait()
 }
@@ -122,16 +132,15 @@ func (t *TaskQueue) Running() int {
 	return len(t.running)
 }
 
-func worker(workerId int, taskch chan Task, done chan int64) {
+func worker(workerId int, taskch chan *Task, done chan int64) {
 	for {
-		select {
-		case task, more := <-taskch:
-			if !more {
-				log.Printf("worker %d exiting\n", workerId)
-				return
-			}
-			task.Run()
-			done <- task.Id()
+		task, more := <-taskch
+		if !more {
+			log.Printf("worker %d exiting\n", workerId)
+			return
 		}
+		(*task).Run()
+		done <- (*task).Id()
+
 	}
 }

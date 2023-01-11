@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 )
@@ -12,6 +13,26 @@ type Task interface {
 	Id() int64
 	toString() string
 	Abort()
+}
+
+func CreateTask(taskType string, payload interface{}) (*Task, error) {
+	var task Task
+	ctx := context.Background()
+	switch taskType {
+	case ShortTaskType:
+		task = &ShortTask{
+			ctx:     ctx,
+			payload: payload.(string),
+		}
+	case LongTaskType:
+		task = &LongTask{
+			ctx:     ctx,
+			payload: payload.(string),
+		}
+	default:
+		return nil, fmt.Errorf("unknown task type: %s", taskType)
+	}
+	return &task, nil
 }
 
 //////////////// ShortTask
