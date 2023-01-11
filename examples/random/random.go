@@ -3,7 +3,8 @@ package main
 import (
 	"fmt"
 	"math/rand"
-	"taskqueue"
+
+	"github.com/VegaPaithankar/taskqueue"
 )
 
 func main() {
